@@ -292,19 +292,296 @@
      "Grep"
      "Search for a pattern in files"
      (lambda (arguments context)
-       (let ((pattern (gethash "pattern" arguments "")))
+       (let ((pattern (gethash "pattern" arguments ""))
+             (path (gethash "path" arguments ".")))
          (handler-case
              (let ((output (with-output-to-string (s)
-                             (run-program "grep" (list "-r" pattern ".")
+                             (run-program "grep" (list "-r" pattern path)
                                           :output s
                                           :error-output s))))
                (make-tool-result :output output))
            (error (e)
-             (create-tool-result (format nil "Error: ~a" e) :is-error t)))))
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
      :input-schema '(("type" . "object")
                      ("properties" . (("pattern" . (("type" . "string")
-                                                    ("description" . "The regular expression pattern to search for")))))
+                                                    ("description" . "The regular expression pattern to search for")))
+                                      ("path" . (("type" . "string")
+                                                 ("description" . "The directory to search in (default: current directory)")))))
                      ("required" . ("pattern")))
      :read-only-p t))
+
+  ;; Delete tool
+  (tool-registry-register registry
+    (make-function-tool
+     "Delete"
+     "Delete a file or directory"
+     (lambda (arguments context)
+       (let ((file-path (gethash "file_path" arguments ""))
+             (recursive (gethash "recursive" arguments nil)))
+         (handler-case
+             (progn
+               (if recursive
+                   (sb-ext:run-program "rm" (list "-rf" file-path))
+                   (delete-file file-path))
+               (make-tool-result :output (format nil "Successfully deleted ~a" file-path)))
+           (error (e)
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("file_path" . (("type" . "string")
+                                                      ("description" . "The absolute path to the file or directory to delete")))
+                                      ("recursive" . (("type" . "boolean")
+                                                      ("description" . "Whether to recursively delete directories (default: false)")))))
+                     ("required" . ("file_path")))))
+
+  ;; Copy tool
+  (tool-registry-register registry
+    (make-function-tool
+     "Copy"
+     "Copy a file or directory"
+     (lambda (arguments context)
+       (let ((source (gethash "source" arguments ""))
+             (destination (gethash "destination" arguments ""))
+             (recursive (gethash "recursive" arguments nil)))
+         (handler-case
+             (progn
+               (if recursive
+                   (sb-ext:run-program "cp" (list "-r" source destination))
+                   (sb-ext:run-program "cp" (list source destination)))
+               (make-tool-result :output (format nil "Successfully copied ~a to ~a" source destination)))
+           (error (e)
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("source" . (("type" . "string")
+                                                   ("description" . "The source file or directory path")))
+                                      ("destination" . (("type" . "string")
+                                                        ("description" . "The destination path")))
+                                      ("recursive" . (("type" . "boolean")
+                                                      ("description" . "Whether to recursively copy directories (default: false)")))))
+                     ("required" . ("source" "destination")))))
+
+  ;; Move tool
+  (tool-registry-register registry
+    (make-function-tool
+     "Move"
+     "Move or rename a file or directory"
+     (lambda (arguments context)
+       (let ((source (gethash "source" arguments ""))
+             (destination (gethash "destination" arguments "")))
+         (handler-case
+             (progn
+               (sb-ext:run-program "mv" (list source destination))
+               (make-tool-result :output (format nil "Successfully moved ~a to ~a" source destination)))
+           (error (e)
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("source" . (("type" . "string")
+                                                   ("description" . "The source file or directory path")))
+                                      ("destination" . (("type" . "string")
+                                                        ("description" . "The destination path")))))
+                     ("required" . ("source" "destination")))))
+
+  ;; ListDirectory tool
+  (tool-registry-register registry
+    (make-function-tool
+     "ListDirectory"
+     "List contents of a directory"
+     (lambda (arguments context)
+       (let ((dir-path (gethash "dir_path" arguments "."))
+             (show-hidden (gethash "show_hidden" arguments nil)))
+         (handler-case
+             (let* ((files (directory (merge-pathnames "*#" (pathname dir-path))))
+                    (filtered (if show-hidden
+                                  files
+                                  (remove-if (lambda (f)
+                                               (char= #\. (char (namestring f) 0)))
+                                             files))))
+               (make-tool-result :output (format nil "~{~a~%~}" (mapcar #'namestring filtered))))
+           (error (e)
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("dir_path" . (("type" . "string")
+                                                     ("description" . "The directory path to list (default: current directory)")))
+                                      ("show_hidden" . (("type" . "boolean")
+                                                        ("description" . "Whether to show hidden files (default: false)")))))
+                     ("required" . ("dir_path")))
+     :read-only-p t))
+
+  ;; Touch tool
+  (tool-registry-register registry
+    (make-function-tool
+     "Touch"
+     "Create an empty file or update timestamp"
+     (lambda (arguments context)
+       (let ((file-path (gethash "file_path" arguments "")))
+         (handler-case
+             (progn
+               (with-open-file (stream file-path :direction :output
+                                                :if-exists :overwrite
+                                                :if-does-not-exist :create)
+                 (setf (file-length stream) 0))
+               (make-tool-result :output (format nil "Successfully touched ~a" file-path)))
+           (error (e)
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("file_path" . (("type" . "string")
+                                                      ("description" . "The file path to touch")))))
+                     ("required" . ("file_path")))))
+
+  ;; Cat tool (Read with line numbers)
+  (tool-registry-register registry
+    (make-function-tool
+     "Cat"
+     "Read a file with line numbers"
+     (lambda (arguments context)
+       (let ((file-path (gethash "file_path" arguments "")))
+         (handler-case
+             (with-open-file (stream file-path :direction :input)
+               (let ((content (make-string (file-length stream))))
+                 (read-sequence content stream)
+                 (let ((lines (split-sequence:split-sequence #\Newline content))
+                       (numbered (with-output-to-string (s)
+                                   (loop for line in lines
+                                         for i from 1
+                                         do (format s "~5d: ~a~%" i line)))))
+                   (make-tool-result :output numbered))))
+           (error (e)
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("file_path" . (("type" . "string")
+                                                      ("description" . "The absolute path to the file to read")))))
+                     ("required" . ("file_path")))
+     :read-only-p t))
+
+  ;; Head tool
+  (tool-registry-register registry
+    (make-function-tool
+     "Head"
+     "Read the first N lines of a file"
+     (lambda (arguments context)
+       (let ((file-path (gethash "file_path" arguments ""))
+             (lines (gethash "lines" arguments 10)))
+         (handler-case
+             (with-open-file (stream file-path :direction :input)
+               (let ((content (make-string (file-length stream))))
+                 (read-sequence content stream)
+                 (let* ((all-lines (split-sequence:split-sequence #\Newline content))
+                        (head-lines (subseq all-lines 0 (min lines (length all-lines)))))
+                   (make-tool-result :output (format nil "~{~a~%~}" head-lines)))))
+           (error (e)
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("file_path" . (("type" . "string")
+                                                      ("description" . "The absolute path to the file to read")))
+                                      ("lines" . (("type" . "integer")
+                                                  ("description" . "Number of lines to read (default: 10)")))))
+                     ("required" . ("file_path")))
+     :read-only-p t))
+
+  ;; Tail tool
+  (tool-registry-register registry
+    (make-function-tool
+     "Tail"
+     "Read the last N lines of a file"
+     (lambda (arguments context)
+       (let ((file-path (gethash "file_path" arguments ""))
+             (lines (gethash "lines" arguments 10)))
+         (handler-case
+             (with-open-file (stream file-path :direction :input)
+               (let ((content (make-string (file-length stream))))
+                 (read-sequence content stream)
+                 (let* ((all-lines (split-sequence:split-sequence #\Newline content))
+                        (tail-start (max 0 (- (length all-lines) lines)))
+                        (tail-lines (subseq all-lines tail-start)))
+                   (make-tool-result :output (format nil "~{~a~%~}" tail-lines)))))
+           (error (e)
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("file_path" . (("type" . "string")
+                                                      ("description" . "The absolute path to the file to read")))
+                                      ("lines" . (("type" . "integer")
+                                                  ("description" . "Number of lines to read from the end (default: 10)")))))
+                     ("required" . ("file_path")))
+     :read-only-p t))
+
+  ;; Wc tool (Word Count)
+  (tool-registry-register registry
+    (make-function-tool
+     "Wc"
+     "Count lines, words, and characters in a file"
+     (lambda (arguments context)
+       (let ((file-path (gethash "file_path" arguments "")))
+         (handler-case
+             (with-open-file (stream file-path :direction :input)
+               (let ((content (make-string (file-length stream))))
+                 (read-sequence content stream)
+                 (let ((lines (length (split-sequence:split-sequence #\Newline content)))
+                       (words (length (split-sequence:split-sequence #\Space content)))
+                       (chars (length content)))
+                   (make-tool-result :output (format nil "~a lines, ~a words, ~a characters~%" lines words chars)))))
+           (error (e)
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("file_path" . (("type" . "string")
+                                                      ("description" . "The absolute path to the file to count")))))
+                     ("required" . ("file_path")))
+     :read-only-p t))
+
+  ;; JsonParse tool
+  (tool-registry-register registry
+    (make-function-tool
+     "JsonParse"
+     "Parse a JSON string and return formatted output"
+     (lambda (arguments context)
+       (let ((json-string (gethash "json_string" arguments ""))
+             (pretty (gethash "pretty" arguments t)))
+         (handler-case
+             (let ((parsed (jonathan:parse json-string)))
+               (if pretty
+                   (make-tool-result :output (jonathan:to-json parsed))
+                   (make-tool-result :output (format nil "~a" parsed))))
+           (error (e)
+             (make-tool-result :output (format nil "JSON Parse Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("json_string" . (("type" . "string")
+                                                        ("description" . "The JSON string to parse")))
+                                      ("pretty" . (("type" . "boolean")
+                                                   ("description" . "Whether to format output (default: true)")))))
+                     ("required" . ("json_string")))
+     :read-only-p t))
+
+  ;; HttpRequest tool
+  (tool-registry-register registry
+    (make-function-tool
+     "HttpRequest"
+     "Send an HTTP request and return the response"
+     (lambda (arguments context)
+       (let ((url (gethash "url" arguments ""))
+             (method (gethash "method" arguments "GET"))
+             (headers (gethash "headers" arguments nil))
+             (body (gethash "body" arguments nil)))
+         (handler-case
+             (let ((response (cond
+                               ((string= method "GET")
+                                (dex:get url))
+                               ((string= method "POST")
+                                (dex:post url :content body))
+                               ((string= method "PUT")
+                                (dex:put url :content body))
+                               ((string= method "DELETE")
+                                (dex:delete url))
+                               (t (dex:get url)))))
+               (make-tool-result :output (format nil "Status: 200~%~a" response)))
+           (error (e)
+             (make-tool-result :output (format nil "HTTP Error: ~a" e) :is-error t)))))
+     :input-schema '(("type" . "object")
+                     ("properties" . (("url" . (("type" . "string")
+                                                ("description" . "The URL to request")))
+                                      ("method" . (("type" . "string")
+                                                   ("description" . "HTTP method: GET, POST, PUT, DELETE (default: GET)")))
+                                      ("headers" . (("type" . "object")
+                                                    ("description" . "HTTP headers as key-value pairs")))
+                                      ("body" . (("type" . "string")
+                                                 ("description" . "Request body for POST/PUT requests")))))
+                     ("required" . ("url")))))
 
   registry)
