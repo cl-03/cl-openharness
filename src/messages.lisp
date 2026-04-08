@@ -14,10 +14,6 @@
   (type "text" :read-only t)
   (text "" :type string))
 
-(defun make-text-block (text)
-  "Create a new text block."
-  (make-text-block :text text))
-
 ;;; ============================================================================
 ;;; Tool Use Block
 ;;; ============================================================================
@@ -28,10 +24,6 @@
   (id (generate-uuid) :type string)
   (name "" :type string)
   (input (make-hash-table :test 'equal) :type hash-table))
-
-(defun make-tool-use-block (name input &optional (id (generate-uuid)))
-  "Create a new tool use block."
-  (make-tool-use-block :id id :name name :input input))
 
 ;;; ============================================================================
 ;;; Tool Result Block
@@ -44,25 +36,19 @@
   (content "" :type string)
   (is-error nil :type boolean))
 
-(defun make-tool-result-block (tool-use-id content &optional (is-error nil))
-  "Create a new tool result block."
-  (make-tool-result-block :tool-use-id tool-use-id :content content :is-error is-error))
-
 ;;; ============================================================================
 ;;; Content Block Union
 ;;; ============================================================================
 
 (defgeneric content-block-type (block)
-  "Get the type of a content block.")
-
-(defmethod content-block-type ((block text-block))
-  "text")
-
-(defmethod content-block-type ((block tool-use-block))
-  "tool_use")
-
-(defmethod content-block-type ((block tool-result-block))
-  "tool_result")
+  (:method (block)
+    nil)
+  (:method ((block text-block))
+    "text")
+  (:method ((block tool-use-block))
+    "tool_use")
+  (:method ((block tool-result-block))
+    "tool_result"))
 
 ;;; ============================================================================
 ;;; Conversation Message
@@ -70,16 +56,12 @@
 
 (defstruct conversation-message
   "A single assistant or user message."
-  (role "user" :type (member "user" "assistant"))
+  (role "user" :type string)
   (content nil :type list))
-
-(defun make-conversation-message (role &optional (content nil))
-  "Create a new conversation message."
-  (make-conversation-message :role role :content content))
 
 (defun conversation-message-from-user-text (text)
   "Construct a user message from raw text."
-  (make-conversation-message "user" (list (make-text-block text))))
+  (make-conversation-message :role "user" :content (list (make-text-block :text text))))
 
 (defun conversation-message-text (message)
   "Return concatenated text blocks from a message."
@@ -152,17 +134,17 @@
           (cond
             ((string= block-type "text")
              (push (make-text-block
-                    (cdr (assoc "text" raw-block :test 'string=)))
+                    :text (cdr (assoc "text" raw-block :test 'string=)))
                    content))
             ((string= block-type "tool_use")
              (push (make-tool-use-block
-                    (cdr (assoc "name" raw-block :test 'string=))
-                    (alist-to-hash-table
-                     (cdr (assoc "input" raw-block :test 'string=)))
-                    (or (cdr (assoc "id" raw-block :test 'string=))
-                        (generate-uuid)))
+                    :name (cdr (assoc "name" raw-block :test 'string=))
+                    :input (alist-to-hash-table
+                            (cdr (assoc "input" raw-block :test 'string=)))
+                    :id (or (cdr (assoc "id" raw-block :test 'string=))
+                            (generate-uuid)))
                    content))))))
-    (make-conversation-message "assistant" (nreverse content))))
+    (make-conversation-message :role "assistant" :content (nreverse content))))
 
 (defun alist-p (obj)
   "Check if an object is an alist."

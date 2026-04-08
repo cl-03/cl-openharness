@@ -15,6 +15,9 @@
                #:uiop)
   :serial t
   :pathname "src/"
+  :around-compile (lambda (next)
+                    (handler-bind ((style-warning #'muffle-warning))
+                      (funcall next)))
   :components ((:file "package")
                (:file "utils")
                (:file "messages")

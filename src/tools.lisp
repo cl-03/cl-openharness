@@ -14,14 +14,6 @@
   (cwd nil :type (or null pathname string))
   (metadata (make-hash-table :test 'equal) :type hash-table))
 
-(defun make-tool-execution-context (cwd &optional (metadata nil))
-  "Create a new tool execution context."
-  (let ((ctx (make-tool-execution-context :cwd cwd)))
-    (when metadata
-      (setf (tool-execution-context-metadata ctx)
-            (alist-to-hash-table metadata)))
-    ctx))
-
 ;;; ============================================================================
 ;;; Tool Result
 ;;; ============================================================================
@@ -31,14 +23,6 @@
   (output "" :type string)
   (is-error nil :type boolean)
   (metadata (make-hash-table :test 'equal) :type hash-table))
-
-(defun make-tool-result (output &key (is-error nil) (metadata nil))
-  "Create a new tool result."
-  (let ((result (make-tool-result :output output :is-error is-error)))
-    (when metadata
-      (setf (tool-result-metadata result)
-            (alist-to-hash-table metadata)))
-    result))
 
 ;;; ============================================================================
 ;;; Base Tool Class
@@ -71,20 +55,24 @@
     :documentation "Whether the tool is read-only")))
 
 (defgeneric tool-execute (tool arguments context)
-  "Execute the tool with the given arguments and context.
-   Returns a tool-result structure."
-  (:documentation "Execute the tool"))
+  (:documentation "Execute the tool with the given arguments and context. Returns a tool-result structure.")
+  (:method (tool arguments context)
+    "Default method returns nil."
+    (declare (ignore tool arguments context))
+    nil))
 
 (defgeneric tool-is-read-only (tool arguments)
-  "Return whether the tool invocation is read-only."
-  (:documentation "Check if tool is read-only")
+  (:documentation "Return whether the tool invocation is read-only.")
+  (:method (tool arguments)
+    nil)
   (:method ((tool base-tool) arguments)
     (declare (ignore arguments))
     (tool-read-only-p tool)))
 
 (defgeneric tool-to-api-schema (tool)
-  "Return the tool schema expected by the API."
-  (:documentation "Convert tool to API schema"))
+  (:documentation "Return the tool schema expected by the API.")
+  (:method (tool)
+    nil))
 
 (defmethod tool-to-api-schema ((tool base-tool))
   `(("name" . ,(tool-name tool))
@@ -127,9 +115,9 @@
       (let ((result (funcall handler arguments context)))
         (etypecase result
           (tool-result result)
-          (string (make-tool-result result))
-          (list (make-tool-result (format nil "~a" result)))
-          (t (make-tool-result (format nil "~a" result))))))))
+          (string (create-tool-result result))
+          (list (create-tool-result (format nil "~a" result)))
+          (t (create-tool-result (format nil "~a" result))))))))
 
 (defmethod tool-is-read-only ((tool function-tool) arguments)
   "Check if function tool invocation is read-only."
@@ -146,7 +134,7 @@
   "Map tool names to implementations."
   (tools (make-hash-table :test 'equal) :type hash-table))
 
-(defun make-tool-registry ()
+(defun create-tool-registry ()
   "Create a new tool registry."
   (make-tool-registry))
 
@@ -199,9 +187,9 @@
                              (run-program "bash" (list "-c" command)
                                           :output s
                                           :error-output s))))
-               (make-tool-result output))
+               (make-tool-result :output output))
            (error (e)
-             (make-tool-result (format nil "Error: ~a" e) :is-error t)))))
+             (create-tool-result (format nil "Error: ~a" e) :is-error t)))))
      :input-schema '(("type" . "object")
                      ("properties" . (("command" . (("type" . "string")
                                                     ("description" . "The shell command to execute")))))
@@ -216,15 +204,15 @@
        (let ((file-path (gethash "file_path" arguments "")))
          (handler-case
              (with-open-file (stream file-path :direction :input)
-               (make-tool-result (let ((content (make-string (file-length stream))))
+               (make-tool-result :output (let ((content (make-string (file-length stream))))
                                    (read-sequence content stream)
                                    content)))
            (error (e)
-             (make-tool-result (format nil "Error: ~a" e) :is-error t)))))
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
      :input-schema '(("type" . "object")
                      ("properties" . (("file_path" . (("type" . "string")
                                                       ("description" . "The absolute path to the file to read")))))
-                     ("required" . ("file_path"))))
+                     ("required" . ("file_path")))
      :read-only-p t))
 
   ;; Write tool
@@ -240,14 +228,14 @@
                                               :if-exists :supersede
                                               :if-does-not-exist :create)
                (write-string content stream)
-               (make-tool-result (format nil "Successfully wrote ~a" file-path)))
+               (make-tool-result :output (format nil "Successfully wrote ~a" file-path)))
            (error (e)
-             (make-tool-result (format nil "Error: ~a" e) :is-error t)))))
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
      :input-schema '(("type" . "object")
                      ("properties" . (("file_path" . (("type" . "string")
-                                                      ("description" . "The absolute path to the file to write"))
-                                                      ("content" . (("type" . "string")
-                                                                    ("description" . "The content to write to the file")))))
+                                                      ("description" . "The absolute path to the file to write")))
+                                      ("content" . (("type" . "string")
+                                                    ("description" . "The content to write to the file")))))
                      ("required" . ("file_path" "content")))))
 
   ;; Edit tool
@@ -267,17 +255,17 @@
                      (progn
                        (file-position stream 0)
                        (write-string (cl-substitute new-string old-string content) stream)
-                       (make-tool-result "Successfully edited file"))
-                     (make-tool-result "Error: old_string not found in file" :is-error t))))
+                       (make-tool-result :output "Successfully edited file"))
+                     (make-tool-result :output "Error: old_string not found in file" :is-error t))))
            (error (e)
-             (make-tool-result (format nil "Error: ~a" e) :is-error t)))))
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
      :input-schema '(("type" . "object")
                      ("properties" . (("file_path" . (("type" . "string")
-                                                      ("description" . "The absolute path to the file to edit"))
-                                                      ("old_string" . (("type" . "string")
-                                                                       ("description" . "The text to replace")))
-                                                      ("new_string" . (("type" . "string")
-                                                                       ("description" . "The text to replace it with")))))
+                                                      ("description" . "The absolute path to the file to edit")))
+                                      ("old-string" . (("type" . "string")
+                                                       ("description" . "The text to replace")))
+                                      ("new-string" . (("type" . "string")
+                                                       ("description" . "The text to replace it with")))))
                      ("required" . ("file_path" "old_string" "new_string")))))
 
   ;; Glob tool
@@ -289,13 +277,13 @@
        (let ((pattern (gethash "pattern" arguments "")))
          (handler-case
              (let ((files (directory pattern)))
-               (make-tool-result (format nil "~{~a~%~}" files)))
+               (make-tool-result :output (format nil "~{~a~%~}" files)))
            (error (e)
-             (make-tool-result (format nil "Error: ~a" e) :is-error t)))))
+             (make-tool-result :output (format nil "Error: ~a" e) :is-error t)))))
      :input-schema '(("type" . "object")
                      ("properties" . (("pattern" . (("type" . "string")
                                                     ("description" . "The glob pattern to match files against")))))
-                     ("required" . ("pattern"))))
+                     ("required" . ("pattern")))
      :read-only-p t))
 
   ;; Grep tool
@@ -310,13 +298,13 @@
                              (run-program "grep" (list "-r" pattern ".")
                                           :output s
                                           :error-output s))))
-               (make-tool-result output))
+               (make-tool-result :output output))
            (error (e)
-             (make-tool-result (format nil "Error: ~a" e) :is-error t)))))
+             (create-tool-result (format nil "Error: ~a" e) :is-error t)))))
      :input-schema '(("type" . "object")
                      ("properties" . (("pattern" . (("type" . "string")
                                                     ("description" . "The regular expression pattern to search for")))))
-                     ("required" . ("pattern"))))
+                     ("required" . ("pattern")))
      :read-only-p t))
 
   registry)

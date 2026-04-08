@@ -1,6 +1,6 @@
 ;;; api-client.lisp - Anthropic-compatible API client
 ;;;
-;;; This file defines the API client wrapper with retry logic for
+;;; This file defines the API client wrapper with retry %logic for
 ;;; Anthropic-compatible endpoints.
 
 (in-package #:cl-openharness)
@@ -38,33 +38,17 @@
   (max-tokens 4096 :type integer)
   (tools nil :type list))
 
-(defun make-api-request (model messages &key system-prompt (max-tokens 4096) (tools nil))
-  "Create an API request."
-  (make-api-request :model model
-                    :messages messages
-                    :system-prompt system-prompt
-                    :max-tokens max-tokens
-                    :tools tools))
-
 ;;; ============================================================================
 ;;; API Client
 ;;; ============================================================================
 
 (defstruct api-client
-  "Anthropic API client wrapper with retry logic."
+  "Anthropic API client wrapper with retry %logic."
   (api-key nil :type (or null string))
   (auth-token nil :type (or null string))
   (base-url nil :type (or null string))
   (claude-oauth nil :type boolean)
   (session-id "" :type string))
-
-(defun make-api-client (&key (api-key nil) (auth-token nil) (base-url nil) (claude-oauth nil))
-  "Create an API client."
-  (make-api-client :api-key api-key
-                   :auth-token auth-token
-                   :base-url base-url
-                   :claude-oauth claude-oauth
-                   :session-id (if claude-oauth (generate-uuid) "")))
 
 (defparameter *api-max-retries* 3
   "Maximum number of retry attempts for API calls.")
@@ -94,7 +78,7 @@
               (error "API request failed after ~a attempts: ~a" (1+ *api-max-retries*) exc)
               (when (retryable-error-p exc)
                 (let ((delay (calculate-api-retry-delay attempt exc)))
-                  (log :warning "API request failed (attempt ~a/~a), retrying in ~as: ~a"
+                  (%log :warning "API request failed (attempt ~a/~a), retrying in ~as: ~a"
                        (1+ attempt) (1+ *api-max-retries*) delay exc)
                   (values (make-api-retry-event
                            :message (format nil "~a" exc)
@@ -138,15 +122,16 @@
         (let ((response (dexador:post
                          full-url
                          :headers headers
-                         :content (jonathan:json body)
+                         :content (jonathan:to-json body)
                          :content-type "application/json"
                          :return :content)))
           (parse-api-response response))
-      (dexador.error:http-status-failed (e)
-        (let ((status (dexador.response:status e.response)))
-          (if (member status *api-retryable-status-codes*)
-              (error e)
-              (error "API error: ~a (~a)" (dexador.response:body e.response) status))))
+      (dexador.error:http-request-service-unavailable (e)
+        (declare (ignore e))
+        (error "API error: service unavailable"))
+      (dexador.error:http-request-too-many-requests (e)
+        (declare (ignore e))
+        (error "API error: rate limited"))
       (error (e)
         (error "API request failed: ~a" e)))))
 
@@ -194,17 +179,9 @@
   (input-tokens 0 :type integer)
   (output-tokens 0 :type integer))
 
-(defun make-usage-snapshot (&key (input-tokens 0) (output-tokens 0))
-  "Create a usage snapshot."
-  (make-usage-snapshot :input-tokens input-tokens :output-tokens output-tokens))
-
 (defstruct cost-tracker
   "Track token costs across conversation turns."
   (total (make-usage-snapshot) :type usage-snapshot))
-
-(defun make-cost-tracker ()
-  "Create a cost tracker."
-  (make-cost-tracker))
 
 (defun cost-tracker-add (tracker usage)
   "Add usage to the tracker."
@@ -213,10 +190,6 @@
   (incf (usage-snapshot-output-tokens (cost-tracker-total tracker))
         (usage-snapshot-output-tokens usage))
   tracker)
-
-(defun cost-tracker-total (tracker)
-  "Return total usage."
-  (cost-tracker-total tracker))
 
 (defun cost-tracker-clear (tracker)
   "Clear the cost tracker."

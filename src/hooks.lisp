@@ -31,25 +31,9 @@
   (reason "" :type string)
   (metadata (make-hash-table :test 'equal) :type hash-table))
 
-(defun make-hook-result (hook-type success &key (output "") (blocked nil) (reason "") (metadata nil))
-  "Create a hook result."
-  (let ((result (make-hook-result :hook-type hook-type
-                                  :success success
-                                  :output output
-                                  :blocked blocked
-                                  :reason reason)))
-    (when metadata
-      (setf (hook-result-metadata result)
-            (alist-to-hash-table metadata)))
-    result))
-
 (defstruct aggregated-hook-result
   "Aggregated results from multiple hook executions."
   (results nil :type list))
-
-(defun make-aggregated-hook-result (&optional (results nil))
-  "Create an aggregated hook result."
-  (make-aggregated-hook-result :results results))
 
 (defun aggregated-hook-result-success-p (aggregated)
   "Check if all hooks succeeded."
@@ -184,10 +168,6 @@
   "Registry of hooks by event type."
   (hooks (make-hash-table :test 'equal) :type hash-table))
 
-(defun make-hook-registry ()
-  "Create a new hook registry."
-  (make-hook-registry))
-
 (defun hook-registry-add (registry hook)
   "Add a hook to the registry."
   (let* ((type (hook-type hook))
@@ -224,12 +204,6 @@
   (api-client nil :type (or null t))
   (default-model "" :type string))
 
-(defun make-hook-execution-context (cwd api-client &optional (default-model ""))
-  "Create a hook execution context."
-  (make-hook-execution-context :cwd cwd
-                               :api-client api-client
-                               :default-model default-model))
-
 ;;; ============================================================================
 ;;; Hook Executor
 ;;; ============================================================================
@@ -238,10 +212,6 @@
   "Execute hooks for lifecycle events."
   (registry nil :type (or null hook-registry))
   (context nil :type (or null hook-execution-context)))
-
-(defun make-hook-executor (registry context)
-  "Create a hook executor."
-  (make-hook-executor :registry registry :context context))
 
 (defun hook-executor-update-registry (executor registry)
   "Replace the active hook registry."
@@ -265,7 +235,7 @@
       (when (matches-hook-p hook payload)
         (let ((result (execute-hook hook event payload context)))
           (push result results))))
-    (make-aggregated-hook-result (nreverse results))))
+    (make-aggregated-hook-result :results (nreverse results))))
 
 (defun matches-hook-p (hook payload)
   "Check if a hook matches the payload."
@@ -275,7 +245,7 @@
                           (gethash "prompt" payload)
                           (gethash "event" payload)
                           "")))
-          (cl-mismatch subject matcher))
+          (strings-match-p subject matcher))
         t)))
 
 (defun execute-hook (hook event payload context)
@@ -328,10 +298,10 @@
     (handler-case
         (let ((response (dexador:post
                          (hook-url hook)
-                         :content (jonathan:json (list :event event :payload payload))
+                         :content (jonathan:to-json (list :event event :payload payload))
                          :headers (hook-headers hook)
                          :timeout (hook-timeout-seconds hook))))
-          (setf output (if (stringp response) response (jonathan:json response)))
+          (setf output (if (stringp response) response (jonathan:to-json response)))
           (setf success t))
       (error (e)
         (setf reason (format nil "HTTP error: ~a" e))
@@ -367,19 +337,23 @@
 
 (defun inject-arguments (template payload &optional (shell-escape nil))
   "Inject payload arguments into a template string."
-  (let ((serialized (jonathan:json payload)))
+  (let ((serialized (jonathan:to-json payload)))
     (if shell-escape
         (format nil "'~a'" serialized)
         (substitute-all "$ARGUMENTS" serialized template))))
 
 (defun substitute-all (old new string)
   "Replace all occurrences of OLD with NEW in STRING."
-  (with-output-to-string (out)
+  (let ((old-len (length old))
+        (result ""))
     (loop :for i :below (length string)
-          :if (string= string old :start1 i :end1 (+ i (length old)))
-            :do (write-string new out)
-                :incf i :by (1- (length old))
-          :else :do (write-char (char string i) out)))))
+          :if (and (<= (+ i old-len) (length string))
+                   (string= string old :start1 i :end1 (+ i old-len)))
+            :do (progn
+                  (setf result (concatenate 'string result new))
+                  (incf i (1- old-len)))
+          :else :do (setf result (concatenate 'string result (string (char string i)))))
+    result))
 
 ;;; ============================================================================
 ;;; Hook Helpers
@@ -388,7 +362,7 @@
 (defun parse-hook-json (text)
   "Parse hook JSON response."
   (handler-case
-      (let ((parsed (jonathan:json text)))
+      (let ((parsed (jonathan:parse text)))
         (if (and (alist-p parsed)
                  (gethash "ok" parsed))
             parsed

@@ -24,24 +24,6 @@
   (hook-executor nil :type (or null hook-executor))
   (tool-metadata (make-hash-table :test 'equal) :type hash-table))
 
-(defun make-query-context (&key api-client tool-registry permission-checker
-                                cwd model system-prompt (max-tokens 4096)
-                                (max-turns nil) permission-prompt ask-user-prompt
-                                hook-executor (tool-metadata nil))
-  "Create a query context."
-  (make-query-context :api-client api-client
-                      :tool-registry tool-registry
-                      :permission-checker permission-checker
-                      :cwd cwd
-                      :model model
-                      :system-prompt system-prompt
-                      :max-tokens max-tokens
-                      :max-turns max-turns
-                      :permission-prompt permission-prompt
-                      :ask-user-prompt ask-user-prompt
-                      :hook-executor hook-executor
-                      :tool-metadata (or tool-metadata (make-hash-table :test 'equal))))
-
 ;;; ============================================================================
 ;;; Query Engine
 ;;; ============================================================================
@@ -62,34 +44,6 @@
   (tool-metadata (make-hash-table :test 'equal) :type hash-table)
   (messages nil :type list)
   (cost-tracker nil :type cost-tracker))
-
-(defun make-query-engine (&key api-client tool-registry permission-checker
-                               cwd model system-prompt (max-tokens 4096)
-                               (max-turns nil) permission-prompt ask-user-prompt
-                               hook-executor (tool-metadata nil))
-  "Create a query engine."
-  (make-query-engine :api-client api-client
-                     :tool-registry tool-registry
-                     :permission-checker permission-checker
-                     :cwd cwd
-                     :model model
-                     :system-prompt system-prompt
-                     :max-tokens max-tokens
-                     :max-turns max-turns
-                     :permission-prompt permission-prompt
-                     :ask-user-prompt ask-user-prompt
-                     :hook-executor hook-executor
-                     :tool-metadata (or tool-metadata (make-hash-table :test 'equal))
-                     :messages nil
-                     :cost-tracker (make-cost-tracker)))
-
-(defun query-engine-messages (engine)
-  "Return the current conversation history."
-  (query-engine-messages engine))
-
-(defun query-engine-max-turns (engine)
-  "Return the maximum number of agentic turns per user input."
-  (query-engine-max-turns engine))
 
 (defun query-engine-total-usage (engine)
   "Return the total usage across all turns."
@@ -194,13 +148,13 @@
       ;; Check max turns
       (when (and (query-context-max-turns context)
                  (>= turns (query-context-max-turns context)))
-        (log :warning "Reached max turns limit (~a)" (query-context-max-turns context))
+        (%log :warning "Reached max turns limit (~a)" (query-context-max-turns context))
         (return-from run-query (values (nreverse events) total-usage)))
 
       ;; Call API
       (let ((request (make-api-request
-                      (query-context-model context)
-                      messages
+                      :model (query-context-model context)
+                      :messages messages
                       :system-prompt (query-context-system-prompt context)
                       :max-tokens (query-context-max-tokens context)
                       :tools (tool-registry-to-api-schema
@@ -234,7 +188,7 @@
                   (when tool-results
                     (push tool-results messages)
                     ;; Continue loop
-                    ))))))))))
+                    ))))))))
 
 (defun process-tool-uses (event context messages)
   "Process tool uses from an event and return tool results message."
@@ -266,25 +220,25 @@
                                        tool tool-input cwd hook-executor
                                        (query-context-api-client context))))
                           (push (make-tool-result-block
-                                 (tool-use-block-id tool-use)
-                                 (tool-result-output result)
-                                 (tool-result-is-error result))
+                                 :tool-use-id (tool-use-block-id tool-use)
+                                 :content (tool-result-output result)
+                                 :is-error (tool-result-is-error result))
                                 tool-results))
                         ;; Permission denied
                         (push (make-tool-result-block
-                               (tool-use-block-id tool-use)
-                               (permission-decision-reason decision)
-                               t)
+                               :tool-use-id (tool-use-block-id tool-use)
+                               :content (permission-decision-reason decision)
+                               :is-error t)
                               tool-results))))
                 ;; Tool not found
                 (push (make-tool-result-block
-                       (tool-use-block-id tool-use)
-                       (format nil "Tool '~a' not found" tool-name)
-                       t)
+                       :tool-use-id (tool-use-block-id tool-use)
+                       :content (format nil "Tool '~a' not found" tool-name)
+                       :is-error t)
                       tool-results)))))))
 
     (when tool-results
-      (make-conversation-message "user" (nreverse tool-results)))))
+      (make-conversation-message :role "user" :content (nreverse tool-results)))))
 
 (defun execute-tool-with-hooks (tool arguments cwd hook-executor api-client)
   "Execute a tool with pre/post hooks."
@@ -300,16 +254,16 @@
         (when (aggregated-hook-result-blocked-p pre-result)
           (return-from execute-tool-with-hooks
             (make-tool-result
-             (format nil "Blocked by PreToolUse hook: ~a"
+             :output (format nil "Blocked by PreToolUse hook: ~a"
                      (aggregated-hook-result-reasons pre-result))
              :is-error t)))))
 
     ;; Execute tool
     (handler-case
         (setf result (tool-execute tool arguments
-                                   (make-tool-execution-context cwd)))
+                                   (make-tool-execution-context :cwd cwd)))
       (error (e)
-        (setf result (make-tool-result (format nil "Error: ~a" e) :is-error t))))
+        (setf result (make-tool-result :output (format nil "Error: ~a" e) :is-error t))))
 
     ;; PostToolUse hooks
     (when hook-executor
@@ -318,7 +272,7 @@
                           (list (cons "tool_name" tool-name)
                                 (cons "result" (tool-result-output result))))))
         (when (aggregated-hook-result-blocked-p post-result)
-          (log :warning "PostToolUse hook blocked: ~a"
+          (%log :warning "PostToolUse hook blocked: ~a"
                (aggregated-hook-result-reasons post-result)))))
 
     result))

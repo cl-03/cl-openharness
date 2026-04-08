@@ -27,36 +27,6 @@
   (hooks nil :type list)
   (tools nil :type list))
 
-(defun make-runtime-bundle (&key api-key auth-token base-url
-                                 (model "claude-sonnet-4-6")
-                                 (system-prompt "You are a helpful AI assistant.")
-                                 (cwd (uiop:getcwd))
-                                 (max-tokens 4096)
-                                 (max-turns nil)
-                                 (permission-mode "default")
-                                 (denied-tools nil)
-                                 (allowed-tools nil)
-                                 (denied-commands nil)
-                                 (path-rules nil)
-                                 (hooks nil)
-                                 (tools nil))
-  "Create a runtime bundle."
-  (make-runtime-bundle :api-key api-key
-                       :auth-token auth-token
-                       :base-url base-url
-                       :model model
-                       :system-prompt system-prompt
-                       :cwd cwd
-                       :max-tokens max-tokens
-                       :max-turns max-turns
-                       :permission-mode permission-mode
-                       :denied-tools denied-tools
-                       :allowed-tools allowed-tools
-                       :denied-commands denied-commands
-                       :path-rules path-rules
-                       :hooks hooks
-                       :tools tools))
-
 ;;; ============================================================================
 ;;; Harness
 ;;; ============================================================================
@@ -68,7 +38,7 @@
   (running nil :type boolean)
   (session-id "" :type string))
 
-(defun make-harness (&key (bundle nil))
+(defun create-harness (&key (bundle nil))
   "Create a new harness instance."
   (let ((harness (make-harness :runtime-bundle bundle
                                :running nil
@@ -84,7 +54,9 @@
   (let ((api-client (make-api-client
                      :api-key (runtime-bundle-api-key bundle)
                      :auth-token (runtime-bundle-auth-token bundle)
-                     :base-url (runtime-bundle-base-url bundle))))
+                     :base-url (runtime-bundle-base-url bundle)
+                     :claude-oauth nil
+                     :session-id "")))
 
     ;; Create tool registry
     (let ((tool-registry (make-tool-registry)))
@@ -94,14 +66,14 @@
         (tool-registry-register tool-registry tool)))
 
     ;; Create permission settings and checker
-    (let ((permission-settings
+    (let* ((permission-settings
            (make-permission-settings
             :mode (runtime-bundle-permission-mode bundle)
             :denied-tools (runtime-bundle-denied-tools bundle)
             :allowed-tools (runtime-bundle-allowed-tools bundle)
             :denied-commands (runtime-bundle-denied-commands bundle)
             :path-rules (runtime-bundle-path-rules bundle)))
-          (permission-checker (make-permission-checker permission-settings)))
+          (permission-checker (create-permission-checker permission-settings)))
 
       ;; Create hook registry and executor
       (let ((hook-registry (make-hook-registry))
@@ -111,11 +83,11 @@
           (hook-registry-add hook-registry hook))
 
         (setf hook-executor (make-hook-executor
-                             hook-registry
-                             (make-hook-execution-context
-                              (runtime-bundle-cwd bundle)
-                              api-client
-                              (runtime-bundle-model bundle))))
+                             :registry hook-registry
+                             :context (make-hook-execution-context
+                                       :cwd (runtime-bundle-cwd bundle)
+                                       :api-client api-client
+                                       :default-model (runtime-bundle-model bundle))))
 
         ;; Create query engine
         (make-query-engine
@@ -127,7 +99,8 @@
          :system-prompt (runtime-bundle-system-prompt bundle)
          :max-tokens (runtime-bundle-max-tokens bundle)
          :max-turns (runtime-bundle-max-turns bundle)
-         :hook-executor hook-executor)))))
+         :hook-executor hook-executor
+         :cost-tracker (make-cost-tracker))))))
 
 (defun harness-run (harness prompt)
   "Run the harness with a user prompt."
@@ -190,7 +163,7 @@
                                         (tools nil))
                         &body body)
   "Create and run a harness within a dynamic extent."
-  `(let ((,harness-var (make-harness
+  `(let ((,harness-var (create-harness
                         :bundle (make-runtime-bundle
                                  :api-key ,api-key
                                  :auth-token ,auth-token
@@ -254,7 +227,7 @@
                                     (system-prompt "You are a helpful AI assistant.")
                                     (cwd (uiop:getcwd)))
   "Set the default harness and call fn with it."
-  (let ((harness (make-harness
+  (let ((harness (create-harness
                   :bundle (make-runtime-bundle
                            :api-key api-key
                            :auth-token auth-token
@@ -285,7 +258,7 @@
   (total-input-tokens 0 :type integer)
   (total-output-tokens 0 :type integer))
 
-(defun make-session-info (&key (id (generate-uuid)))
+(defun create-session-info (&key (id (generate-uuid)))
   "Create a session info."
   (make-session-info :id id
                      :created-at (get-universal-time)

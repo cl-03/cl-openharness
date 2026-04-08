@@ -21,11 +21,11 @@
 
 (defun json-encode (object)
   "Encode an object to JSON string."
-  (jonathan:json object))
+  (jonathan:to-json object))
 
 (defun json-decode (string)
   "Decode a JSON string to an object."
-  (jonathan:json string :json-keyword nil))
+  (jonathan:parse string))
 
 ;;; ============================================================================
 ;;; Path Utilities
@@ -48,10 +48,34 @@
                  ((string= path-part pattern-part) t)
                  ((and (string= pattern-part "*.*")
                        (find #\. path-part)) t)
-                 (t (cl-mismatch path-part pattern-part)))))
+                 (t (strings-match-p path-part pattern-part)))))
       (if (= (length path-parts) (length pattern-parts))
           (every #'match-part path-parts pattern-parts)
           nil))))
+
+(defun strings-match-p (string pattern)
+  "Check if string matches pattern (supports * wildcard)."
+  (cond
+    ((string= pattern "*") t)
+    ((string= string pattern) t)
+    ((and (string= pattern "*.*")
+          (find #\. string)) t)
+    ((search "*" pattern)
+     ;; Simple wildcard matching
+     (let ((parts (split-sequence:split-sequence #\* pattern)))
+       (if (null parts)
+           t
+           (and (or (null (car parts))
+                    (search (car parts) string :start2 0))
+                (loop with pos = 0
+                      for part in (cdr parts)
+                      always (if (string= part "")
+                                 t
+                                 (let ((new-pos (search part string :start2 pos)))
+                                   (if new-pos
+                                       (setf pos (+ new-pos (length part)))
+                                       nil))))))))
+    (t (string= string pattern))))
 
 ;;; ============================================================================
 ;;; Retry Utilities
@@ -77,7 +101,7 @@
          (jitter (* capped-delay 0.25 (random 1.0))))
     (+ capped-delay jitter)))
 
-(defun with-retry ((&key (max-attempts *max-retries*)
+(defmacro with-retry ((&key (max-attempts *max-retries*)
                          (delay-fn #'calculate-retry-delay)
                          (retryable-p (lambda (condition)
                                        (declare (ignore condition))
@@ -85,18 +109,19 @@
                          (on-retry (lambda (condition attempt)
                                     (declare (ignore condition attempt))
                                     nil)))
+                      &body body)
   "Execute body with retry logic."
-  (let ((attempt 0))
-    (loop
-      (handler-case
-          (return (progn ,@body))
-        (condition (c)
-          (incf attempt)
-          (if (>= attempt max-attempts)
-              (error c)
-              (when (funcall retryable-p c)
-                (funcall on-retry c attempt)
-                (sleep (funcall delay-fn (1- attempt))))))))))
+  `(let ((attempt 0))
+     (loop
+       (handler-case
+           (return (progn ,@body))
+         (condition (c)
+           (incf attempt)
+           (if (>= attempt max-attempts)
+               (error c)
+               (when (funcall ,retryable-p c)
+                 (funcall ,on-retry c attempt)
+                 (sleep (funcall ,delay-fn (1- attempt))))))))))
 
 ;;; ============================================================================
 ;;; Async Utilities (using bordeaux-threads)
@@ -104,22 +129,18 @@
 
 (defmacro with-timeout ((timeout-seconds) &body body)
   "Execute body with a timeout."
-  `(let ((thread (bordeaux-threads:make-thread
-                  (lambda ()
-                    (let ((result (progn ,@body)))
-                      (bordeaux-threads:make-instance
-                       'thread-result
-                       :success t
-                       :value result))))))
+  `(let* ((result-box (list nil)) ; Simple list as mutable box
+          (thread (bordeaux-threads:make-thread
+                   (lambda ()
+                     (setf (car result-box)
+                           (list :success (progn ,@body)))))))
      (if (bordeaux-threads:join-thread thread :timeout ,timeout-seconds)
-         (thread-result-value (bordeaux-threads:thread-result thread))
+         (if (eq (car (car result-box)) :success)
+             (cadr (car result-box))
+             (error "Thread failed"))
          (progn
            (bordeaux-threads:destroy-thread thread)
            (error "Operation timed out after ~a seconds" ,timeout-seconds)))))
-
-(defstruct thread-result
-  success
-  value)
 
 ;;; ============================================================================
 ;;; Logging
@@ -131,7 +152,7 @@
 (defparameter *log-output* *standard-output*
   "Stream for log output.")
 
-(defun log (level format-string &rest args)
+(defun %log (level format-string &rest args)
   "Log a message at the specified level."
   (when (or (eq level :debug)
             (and (eq level :info) (member *log-level* '(:info :warning :error)))
@@ -147,7 +168,7 @@
 (defmacro defun-logging (name args &body body)
   "Define a function with automatic entry/exit logging."
   `(defun ,name ,args
-     (log :debug "Entering ~a with args: ~s" ',name (list ,@args))
+     (%log :debug "Entering ~a with args: ~s" ',name (list ,@args))
      (let ((result (progn ,@body)))
-       (log :debug "Exiting ~a with result: ~s" ',name result)
+       (%log :debug "Exiting ~a with result: ~s" ',name result)
        result)))

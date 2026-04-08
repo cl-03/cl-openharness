@@ -50,7 +50,7 @@
   (denied-commands nil :type list)
   (path-rules nil :type list))
 
-(defun make-permission-settings (&key (mode +permission-mode-default+)
+(defun create-permission-settings (&key (mode +permission-mode-default+)
                                       (denied-tools nil)
                                       (allowed-tools nil)
                                       (denied-commands nil)
@@ -71,7 +71,7 @@
   (pattern "" :type string)
   (allow t :type boolean))
 
-(defun make-path-rule (pattern &optional (allow t))
+(defun create-path-rule (pattern &optional (allow t))
   "Create a path rule."
   (make-path-rule :pattern pattern :allow allow))
 
@@ -85,7 +85,7 @@
   (requires-confirmation nil :type boolean)
   (reason "" :type string))
 
-(defun make-permission-decision (allowed &key (requires-confirmation nil) (reason ""))
+(defun create-permission-decision (allowed &key (requires-confirmation nil) (reason ""))
   "Create a permission decision."
   (make-permission-decision :allowed allowed
                            :requires-confirmation requires-confirmation
@@ -100,17 +100,18 @@
   (settings nil :type (or null permission-settings))
   (path-rules nil :type list))
 
-(defun make-permission-checker (settings)
+(defun create-permission-checker (settings)
   "Create a permission checker from settings."
-  (let ((checker (make-permission-checker :settings settings)))
+  (let ((checker (make-permission-checker :settings settings
+                                          :path-rules nil)))
     ;; Parse path rules from settings
     (setf (permission-checker-path-rules checker)
           (mapcar (lambda (rule)
                     (if (path-rule-p rule)
                         rule
-                        (make-path-rule (getf rule :pattern)
-                                       (getf rule :allow))))
-                  (permission-settings-path-rules settings))))
+                        (make-path-rule :pattern (getf rule :pattern)
+                                       :allow (getf rule :allow))))
+                  (permission-settings-path-rules settings)))
     checker))
 
 (defun match-path-pattern (path pattern)
@@ -153,89 +154,54 @@
 
 (defun permission-evaluate (checker tool-name &key is-read-only file-path command)
   "Return whether the tool may run immediately."
-  ;; Built-in sensitive path protection
-  (when file-path
-    (when (match-sensitive-path-p file-path)
-      (return-from permission-evaluate
-        (make-permission-decision
-         nil
-         :reason (format nil "Access denied: ~a is a sensitive credential path"
-                         file-path)))))
-
-  ;; Explicit tool deny list
-  (when (member tool-name (permission-settings-denied-tools
-                           (permission-checker-settings checker))
-                :test #'string=)
-    (return-from permission-evaluate
-      (make-permission-decision
-       nil
-       :reason (format nil "~a is explicitly denied" tool-name))))
-
-  ;; Explicit tool allow list
-  (when (member tool-name (permission-settings-allowed-tools
-                           (permission-checker-settings checker))
-                :test #'string=)
-    (return-from permission-evaluate
-      (make-permission-decision
-       t
-       :reason (format nil "~a is explicitly allowed" tool-name))))
-
-  ;; Check path-level rules
-  (when file-path
-    (dolist (rule (permission-checker-path-rules checker))
-      (when (match-path-pattern file-path (path-rule-pattern rule))
-        (if (path-rule-allow rule)
-            (return-from permission-evaluate
-              (make-permission-decision
-               t
-               :reason (format nil "Path ~a matches allow rule: ~a"
-                               file-path (path-rule-pattern rule))))
-            (return-from permission-evaluate
-              (make-permission-decision
-               nil
-               :reason (format nil "Path ~a matches deny rule: ~a"
-                               file-path (path-rule-pattern rule))))))))
-
-  ;; Check command deny patterns
-  (when command
-    (dolist (pattern (permission-settings-denied-commands
-                      (permission-checker-settings checker)))
-      (when (cl-mismatch command pattern)
-        (return-from permission-evaluate
-          (make-permission-decision
-           nil
-           :reason (format nil "Command matches deny pattern: ~a" pattern))))))
-
-  ;; Full auto: allow everything
-  (when (string= (permission-settings-mode
-                  (permission-checker-settings checker))
-                 +permission-mode-auto+)
-    (return-from permission-evaluate
-      (make-permission-decision
-       t
-       :reason "Auto mode allows all tools"))))
-
-  ;; Read-only tools always allowed
-  (when is-read-only
-    (return-from permission-evaluate
-      (make-permission-decision
-       t
-       :reason "read-only tools are allowed"))))
-
-  ;; Plan mode: block mutating tools
-  (when (string= (permission-settings-mode
-                  (permission-checker-settings checker))
-                 +permission-mode-plan+)
-    (return-from permission-evaluate
-      (make-permission-decision
-       nil
-       :reason "Plan mode blocks mutating tools until the user exits plan mode"))))
-
-  ;; Default mode: require confirmation for mutating tools
-  (make-permission-decision
-   nil
-   :requires-confirmation t
-   :reason "Mutating tools require user confirmation in default mode"))
+  (let ((result nil))
+    (cond
+      ;; Built-in sensitive path protection
+      ((and file-path (match-sensitive-path-p file-path))
+       (setf result (create-permission-decision
+                     nil
+                     :reason (format nil "Access denied: ~a is a sensitive credential path"
+                                     file-path))))
+      ;; Explicit tool deny list
+      ((member tool-name (permission-settings-denied-tools
+                          (permission-checker-settings checker))
+               :test #'string=)
+       (setf result (create-permission-decision
+                     nil
+                     :reason (format nil "~a is explicitly denied" tool-name))))
+      ;; Explicit tool allow list
+      ((member tool-name (permission-settings-allowed-tools
+                          (permission-checker-settings checker))
+               :test #'string=)
+       (setf result (create-permission-decision
+                     t
+                     :reason (format nil "~a is explicitly allowed" tool-name))))
+      ;; Read-only tools always allowed
+      (is-read-only
+       (setf result (create-permission-decision
+                     t
+                     :reason "read-only tools are allowed")))
+      ;; Full auto: allow everything
+      ((string= (permission-settings-mode
+                 (permission-checker-settings checker))
+                +permission-mode-auto+)
+       (setf result (create-permission-decision
+                     t
+                     :reason "Auto mode allows all tools")))
+      ;; Plan mode: block mutating tools
+      ((string= (permission-settings-mode
+                 (permission-checker-settings checker))
+                +permission-mode-plan+)
+       (setf result (create-permission-decision
+                     nil
+                     :reason "Plan mode blocks mutating tools until the user exits plan mode")))
+      (t
+       ;; Default mode: require confirmation for mutating tools
+       (setf result (create-permission-decision
+                     nil
+                     :requires-confirmation t
+                     :reason "Mutating tools require user confirmation in default mode"))))
+    result))
 
 ;;; ============================================================================
 ;;; Permission Helpers
