@@ -101,6 +101,27 @@
             (assert (session-info-p info))
             (assert (string= (session-info-id info) "test-session")))))
 
+      ;; Test 13: Built-in tools registration
+      (test "built-in tools registration"
+        (lambda ()
+          (let ((registry (make-tool-registry)))
+            (register-builtin-tools registry)
+            (let ((tools (tool-registry-list-tools registry)))
+              (assert (> (length tools) 15))
+              (format t "(~a tools registered) " (length tools))))))
+
+      ;; Test 14: Required tools exist
+      (test "required tools exist"
+        (lambda ()
+          (let ((registry (make-tool-registry)))
+            (register-builtin-tools registry)
+            (dolist (tool-name '("Bash" "Read" "Write" "Edit" "Glob" "Grep"
+                                 "Delete" "Copy" "Move" "ListDirectory" "Touch"
+                                 "Cat" "Head" "Tail" "Wc" "JsonParse" "HttpRequest"))
+              (assert (tool-registry-has-p registry tool-name) ()
+                      "Tool ~a not found" tool-name))
+            (format t "(17 tools verified) "))))
+
       (format t "~%========================================~%")
       (format t "TOTAL: ~a passed, ~a failed~%" passed failed)
       (format t "========================================~%")
